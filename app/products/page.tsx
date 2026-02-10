@@ -1,0 +1,328 @@
+﻿'use client';
+
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { rtdb } from '@/lib/firebase';
+import { ref, onValue } from 'firebase/database';
+import Header from '@/components/Header';
+import Footer from '@/components/Footer';
+import Icon from '@/components/ui/AppIcon';
+import ProductModal from './ProductModal';
+
+interface Product {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  images: string[];
+  imageAlt?: string;
+  quantity?: number | null;
+  description?: string;
+}
+
+interface Category {
+  id: string;
+  name: string;
+}
+
+interface ToastMessage {
+  id: string;
+  type: 'success' | 'error';
+  text: string;
+}
+
+export default function ProductsPage() {
+  const searchParams = useSearchParams();
+  const [products, setProducts] = useState<Product[]>([]);
+  const [filteredProducts, setFilteredProducts] = useState<Product[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'price-asc' | 'price-desc' | 'name'>('name');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const showToast = (type: 'success' | 'error', text: string) => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, type, text }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 3000);
+  };
+
+  // Load products from Firebase
+  useEffect(() => {
+    const productsRef = ref(rtdb, 'products');
+    const unsubscribe = onValue(productsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const productsData = snapshot.val();
+        const productsArray = Object.entries(productsData).map(([id, data]: [string, any]) => ({
+          id,
+          ...data,
+          images: data.images || (data.image ? [data.image] : [])
+        }));
+        setProducts(productsArray);
+      } else {
+        setProducts([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Load categories from Firebase (not from products!)
+  useEffect(() => {
+    const categoriesRef = ref(rtdb, 'categories');
+    const unsubscribe = onValue(categoriesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const categoriesArray = Object.entries(data).map(([id, val]: [string, any]) => ({
+          id,
+          name: typeof val === 'string' ? val : val.name
+        })) as Category[];
+        setCategories(categoriesArray);
+      } else {
+        setCategories([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    const searchId = searchParams.get('search');
+    if (searchId) {
+      const product = products.find(p => p.id === searchId);
+      if (product) {
+        setSelectedProduct(product);
+      }
+    }
+  }, [searchParams, products]);
+
+  useEffect(() => {
+    let filtered = products;
+
+    if (selectedCategory !== 'All') {
+      filtered = filtered.filter(p => p.category === selectedCategory);
+    }
+
+    if (searchQuery) {
+      filtered = filtered.filter(p =>
+        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        p.category.toLowerCase().includes(searchQuery.toLowerCase())
+      );
+    }
+
+    if (sortBy === 'price-asc') {
+      filtered = [...filtered].sort((a, b) => a.price - b.price);
+    } else if (sortBy === 'price-desc') {
+      filtered = [...filtered].sort((a, b) => b.price - a.price);
+    } else {
+      filtered = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    setFilteredProducts(filtered);
+  }, [products, selectedCategory, searchQuery, sortBy]);
+
+  const addToCart = (product: Product, e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (product.quantity === 0) {
+      showToast('error', 'This product is out of stock!');
+      return;
+    }
+
+    const cart = JSON.parse(localStorage.getItem('cart') || '[]');
+    const existingItem = cart.find((item: any) => item.id === product.id);
+
+    if (existingItem) {
+      if (product.quantity !== null && product.quantity !== undefined) {
+        if (existingItem.quantity >= product.quantity) {
+          showToast('error', `Cannot add more items. Only ${product.quantity} in stock!`);
+          return;
+        }
+      }
+      existingItem.quantity += 1;
+    } else {
+      cart.push({
+        id: product.id,
+        name: product.name,
+        price: product.price,
+        image: product.images?.[0] || '/placeholder.jpg',
+        quantity: 1,
+      });
+    }
+
+    localStorage.setItem('cart', JSON.stringify(cart));
+    window.dispatchEvent(new Event('cartUpdated'));
+
+    const itemName = product.name.length > 20 ? product.name.substring(0, 20) + '...' : product.name;
+    showToast('success', `Added "${itemName}" to cart!`);
+  };
+
+  return (
+    <>
+      <Header />
+
+      {/* Toast Notifications */}
+      <div className="fixed top-24 right-6 z-50 space-y-2">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`animate-slide-in-right px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 ${
+              toast.type === 'success'
+                ? 'bg-green-500 text-white'
+                : 'bg-red-500 text-white'
+            }`}
+          >
+            <Icon
+              name={toast.type === 'success' ? 'CheckCircleIcon' : 'XCircleIcon'}
+              size={20}
+            />
+            <span>{toast.text}</span>
+          </div>
+        ))}
+      </div>
+
+      <main className="pt-20 bg-background min-h-screen">
+        <div className="max-w-7xl mx-auto px-6 py-16">
+          <div className="mb-12">
+            <h1 className="text-4xl md:text-5xl font-serif font-bold text-foreground mb-4">
+              Our Products
+            </h1>
+            <p className="text-muted-foreground">
+              Discover our curated collection of premium items
+            </p>
+          </div>
+
+          <div className="flex flex-col lg:flex-row gap-8">
+            <aside className="lg:w-64 space-y-6">
+              <div className="bg-card p-6 rounded-xl border border-border">
+                <h3 className="text-lg font-semibold text-foreground mb-4">Categories</h3>
+                <div className="space-y-2">
+                  <button
+                    onClick={() => setSelectedCategory('All')}
+                    className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                      selectedCategory === 'All'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'hover:bg-secondary'
+                    }`}
+                  >
+                    All Products
+                  </button>
+                  {categories.map((category) => (
+                    <button
+                      key={category.id}
+                      onClick={() => setSelectedCategory(category.name)}
+                      className={`w-full text-left px-3 py-2 rounded-lg transition-colors ${
+                        selectedCategory === category.name
+                          ? 'bg-primary text-primary-foreground'
+                          : 'hover:bg-secondary'
+                      }`}
+                    >
+                      {category.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-card p-6 rounded-xl border border-border">
+                <h3 className="text-lg font-semibold text-foreground mb-4">Sort By</h3>
+                <select
+                  value={sortBy}
+                  onChange={(e) => setSortBy(e.target.value as any)}
+                  className="w-full px-3 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background"
+                >
+                  <option value="name">Name</option>
+                  <option value="price-asc">Price: Low to High</option>
+                  <option value="price-desc">Price: High to Low</option>
+                </select>
+              </div>
+            </aside>
+
+            <div className="flex-1">
+              {filteredProducts.length === 0 ? (
+                <div className="text-center py-16">
+                  <Icon name="ShoppingBagIcon" size={64} className="mx-auto text-muted-foreground mb-4" />
+                  <h3 className="text-xl font-semibold text-foreground mb-2">No products found</h3>
+                  <p className="text-muted-foreground">Try adjusting your filters</p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+                  {filteredProducts.map((product) => (
+                    <div
+                      key={product.id}
+                      className="bg-card rounded-xl border border-border overflow-hidden hover:shadow-lg transition-all group relative"
+                    >
+                      <div
+                        onClick={() => setSelectedProduct(product)}
+                        className="aspect-square overflow-hidden bg-secondary relative cursor-pointer"
+                      >
+                        <img
+                          src={product.images?.[0] || '/placeholder.jpg'}
+                          alt={product.imageAlt || product.name || 'Product image'}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+
+                        {product.quantity === 0 ? (
+                          <div className="absolute top-3 left-3 bg-red-500 text-white px-3 py-1 rounded-full text-xs font-bold">
+                            Out of Stock
+                          </div>
+                        ) : product.quantity !== null && product.quantity !== undefined && product.quantity <= 5 ? (
+                          <div className="absolute top-3 left-3 bg-yellow-500 text-white px-3 py-1 rounded-full text-xs font-bold">
+                            Only {product.quantity} left
+                          </div>
+                        ) : null}
+
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            addToCart(product, e);
+                          }}
+                          disabled={product.quantity === 0}
+                          className={`absolute bottom-3 right-3 w-12 h-12 rounded-lg flex items-center justify-center transition-all shadow-lg ${
+                            product.quantity === 0
+                              ? 'bg-gray-400 cursor-not-allowed'
+                              : 'bg-green-500 hover:bg-green-600 hover:scale-110'
+                          }`}
+                        >
+                          <Icon name="ShoppingCartIcon" size={24} className="text-white" />
+                        </button>
+                      </div>
+
+                      <div
+                        onClick={() => setSelectedProduct(product)}
+                        className="p-4 cursor-pointer"
+                      >
+                        <p className="text-xs text-muted-foreground uppercase tracking-wide mb-1">
+                          {product.category}
+                        </p>
+                        <h3 className="text-lg font-semibold text-foreground mb-2 line-clamp-1">
+                          {product.name}
+                        </h3>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xl font-bold text-primary">
+                            ${product.price.toFixed(2)}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </main>
+      <Footer />
+
+      {selectedProduct && (
+        <ProductModal
+          product={selectedProduct}
+          onClose={() => setSelectedProduct(null)}
+          onAddToCart={addToCart}
+        />
+      )}
+    </>
+  );
+}

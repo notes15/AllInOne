@@ -1,0 +1,308 @@
+﻿'use client';
+
+import { useState, useEffect } from 'react';
+import { useCart } from '../../lib/CartContext';
+import Icon from '../../components/Icon';
+
+interface Product {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  stock: number;
+  images?: string[];
+  description?: string;
+  sizes?: number[];
+}
+
+interface ProductModalProps {
+  product: Product | null;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+interface SizeQuantity {
+  size: number;
+  quantity: number;
+}
+
+export default function ProductModal({ product, isOpen, onClose }: ProductModalProps) {
+  const { addToCart } = useCart();
+  const [selectedImage, setSelectedImage] = useState(0);
+  const [sizeQuantities, setSizeQuantities] = useState<SizeQuantity[]>([]);
+  const [selectedSize, setSelectedSize] = useState<number | ''>('');
+
+  useEffect(() => {
+    if (product && isOpen) {
+      setSelectedImage(0);
+      setSizeQuantities([]);
+      setSelectedSize('');
+    }
+  }, [product, isOpen]);
+
+  if (!isOpen || !product) return null;
+
+  const images = product.images && product.images.length > 0 ? product.images : ['/placeholder.jpg'];
+  const hasSizes = product.sizes && product.sizes.length > 0;
+  const sortedSizes = hasSizes ? [...product.sizes!].sort((a, b) => a - b) : [];
+
+  const handleAddSize = () => {
+    if (selectedSize === '') return;
+    
+    const existingIndex = sizeQuantities.findIndex(sq => sq.size === selectedSize);
+    if (existingIndex >= 0) {
+      const newQuantities = [...sizeQuantities];
+      newQuantities[existingIndex].quantity += 1;
+      setSizeQuantities(newQuantities);
+    } else {
+      setSizeQuantities([...sizeQuantities, { size: selectedSize as number, quantity: 1 }]);
+    }
+    setSelectedSize('');
+  };
+
+  const updateQuantity = (size: number, change: number) => {
+    setSizeQuantities(prev => {
+      const newQuantities = prev.map(sq => {
+        if (sq.size === size) {
+          const newQty = sq.quantity + change;
+          return { ...sq, quantity: Math.max(0, newQty) };
+        }
+        return sq;
+      }).filter(sq => sq.quantity > 0);
+      return newQuantities;
+    });
+  };
+
+  const removeSize = (size: number) => {
+    setSizeQuantities(prev => prev.filter(sq => sq.size !== size));
+  };
+
+  const getTotalItems = () => {
+    return sizeQuantities.reduce((sum, sq) => sum + sq.quantity, 0);
+  };
+
+  const handleAddToCart = () => {
+    if (hasSizes) {
+      if (sizeQuantities.length === 0) {
+        alert('Please select at least one size');
+        return;
+      }
+      sizeQuantities.forEach(sq => {
+        for (let i = 0; i < sq.quantity; i++) {
+          addToCart({ ...product, selectedSize: sq.size });
+        }
+      });
+    } else {
+      addToCart(product);
+    }
+    onClose();
+  };
+
+  const totalItems = getTotalItems();
+  const availableSizesForDropdown = sortedSizes.filter(
+    size => !sizeQuantities.some(sq => sq.size === size)
+  );
+
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+      <div className="bg-background rounded-2xl max-w-6xl w-full max-h-[96vh] overflow-hidden shadow-2xl">
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 border-b border-border">
+            <h2 className="text-2xl font-bold text-foreground">{product.name}</h2>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-secondary rounded-lg transition-colors"
+            >
+              <Icon name="XMarkIcon" size={24} />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 p-8">
+              {/* Left Column - Images */}
+              <div className="space-y-4">
+                <div className="aspect-square rounded-xl overflow-hidden bg-secondary">
+                  <img
+                    src={images[selectedImage]}
+                    alt={product.name}
+                    className="w-full h-full object-cover"
+                  />
+                </div>
+                {images.length > 1 && (
+                  <div className="grid grid-cols-4 gap-3">
+                    {images.map((image, index) => (
+                      <button
+                        key={index}
+                        onClick={() => setSelectedImage(index)}
+                        className={`aspect-square rounded-lg overflow-hidden border-2 transition-all ${
+                          selectedImage === index
+                            ? 'border-primary ring-2 ring-primary/20'
+                            : 'border-transparent hover:border-primary/50'
+                        }`}
+                      >
+                        <img src={image} alt={`${product.name} ${index + 1}`} className="w-full h-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right Column - Details */}
+              <div className="space-y-6">
+                {/* Price and Stock */}
+                <div className="space-y-3">
+                  <div className="text-4xl font-bold text-primary">${product.price.toFixed(2)}</div>
+                  <div className="flex items-center gap-2">
+                    <div
+                      className={`inline-block px-3 py-1 rounded-full text-sm font-medium ${
+                        product.stock > 10
+                          ? 'bg-green-500/10 text-green-500'
+                          : product.stock > 0
+                          ? 'bg-yellow-500/10 text-yellow-500'
+                          : 'bg-red-500/10 text-red-500'
+                      }`}
+                    >
+                      {product.stock > 10 ? 'In Stock' : product.stock > 0 ? `Only ${product.stock} left` : 'Out of Stock'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Size Selection */}
+                {hasSizes && (
+                  <div className="space-y-4 p-5 bg-secondary/50 rounded-xl border border-border">
+                    <h3 className="text-lg font-semibold text-foreground">Select Sizes & Quantity</h3>
+                    
+                    {/* Dropdown + Add Button */}
+                    <div className="flex gap-3">
+                      <select
+                        value={selectedSize}
+                        onChange={(e) => setSelectedSize(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="flex-1 px-4 py-3 bg-background border border-border rounded-lg text-foreground focus:outline-none focus:ring-2 focus:ring-primary"
+                      >
+                        <option value="">Choose a size...</option>
+                        {availableSizesForDropdown.map(size => (
+                          <option key={size} value={size}>
+                            Size {size}
+                          </option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={handleAddSize}
+                        disabled={selectedSize === ''}
+                        className="px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                      >
+                        Add
+                      </button>
+                    </div>
+
+                    {/* Selected Sizes with Quantities */}
+                    {sizeQuantities.length > 0 && (
+                      <div className="space-y-3 pt-3 border-t border-border">
+                        <h4 className="text-sm font-medium text-muted-foreground">Selected Sizes:</h4>
+                        <div className="space-y-2">
+                          {sizeQuantities
+                            .sort((a, b) => a.size - b.size)
+                            .map(sq => (
+                              <div
+                                key={sq.size}
+                                className="flex items-center justify-between p-3 bg-background rounded-lg border border-border"
+                              >
+                                <div className="flex items-center gap-3">
+                                  <div className="w-12 h-12 bg-primary/10 rounded-lg flex items-center justify-center">
+                                    <span className="text-lg font-bold text-primary">{sq.size}</span>
+                                  </div>
+                                  <span className="font-medium text-foreground">Size {sq.size}</span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={() => updateQuantity(sq.size, -1)}
+                                    className="w-8 h-8 flex items-center justify-center bg-secondary hover:bg-secondary/80 rounded-lg transition-colors"
+                                  >
+                                    −
+                                  </button>
+                                  <span className="w-8 text-center font-semibold text-foreground">{sq.quantity}</span>
+                                  <button
+                                    onClick={() => updateQuantity(sq.size, 1)}
+                                    className="w-8 h-8 flex items-center justify-center bg-secondary hover:bg-secondary/80 rounded-lg transition-colors"
+                                  >
+                                    +
+                                  </button>
+                                  <button
+                                    onClick={() => removeSize(sq.size)}
+                                    className="ml-2 w-8 h-8 flex items-center justify-center text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                                  >
+                                    <Icon name="XMarkIcon" size={16} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                        <div className="pt-2 border-t border-border">
+                          <div className="text-sm text-muted-foreground">
+                            Total Items: <span className="font-bold text-foreground text-lg">{totalItems}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Description */}
+                {product.description && (
+                  <div className="space-y-2">
+                    <h3 className="text-lg font-semibold text-foreground">Description</h3>
+                    <p className="text-muted-foreground leading-relaxed">{product.description}</p>
+                  </div>
+                )}
+
+                {/* Product Details */}
+                <div className="space-y-2 p-5 bg-secondary/50 rounded-xl">
+                  <h3 className="text-lg font-semibold text-foreground mb-3">Product Details</h3>
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-muted-foreground">Category:</span>
+                      <div className="font-medium text-foreground">{product.category}</div>
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Product ID:</span>
+                      <div className="font-medium text-foreground font-mono text-xs">#{product.id}</div>
+                    </div>
+                    {images.length > 0 && (
+                      <div>
+                        <span className="text-muted-foreground">Images:</span>
+                        <div className="font-medium text-foreground">{images.length}</div>
+                      </div>
+                    )}
+                    {hasSizes && (
+                      <div>
+                        <span className="text-muted-foreground">Sizes Available:</span>
+                        <div className="font-medium text-foreground">{sortedSizes.length}</div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Footer - Add to Cart */}
+          <div className="p-6 border-t border-border bg-secondary/30">
+            <button
+              onClick={handleAddToCart}
+              disabled={product.stock === 0 || (hasSizes && sizeQuantities.length === 0)}
+              className="w-full py-4 bg-primary text-primary-foreground rounded-xl font-semibold text-lg hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed transition-all hover:shadow-lg"
+            >
+              {product.stock === 0
+                ? 'Out of Stock'
+                : hasSizes && totalItems > 0
+                ? `Add ${totalItems} Item${totalItems > 1 ? 's' : ''} to Cart`
+                : 'Add to Cart'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

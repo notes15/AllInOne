@@ -1,0 +1,292 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { useAuth } from '@/lib/auth-context';
+import { rtdb } from '@/lib/firebase';
+import { ref, get, remove, onValue } from 'firebase/database';
+import { useRouter } from 'next/navigation';
+import Icon from '@/components/ui/AppIcon';
+
+interface OrderItem {
+  id: string;
+  name: string;
+  price: number;
+  quantity: number;
+  image?: string;
+}
+
+interface Order {
+  id: string;
+  userId: string;
+  items: OrderItem[];
+  total: number;
+  status: string;
+  locked?: boolean;
+  createdAt: number;
+  shippingAddress?: {
+    fullName: string;
+    address: string;
+    city: string;
+    zipCode: string;
+    country: string;
+  };
+  paymentMethod?: string;
+}
+
+export default function OrdersClient() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(true);
+  const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
+  const [cancellingOrder, setCancellingOrder] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!loading && !user) {
+      router.push('/homepage');
+    }
+  }, [user, loading, router]);
+
+  useEffect(() => {
+    if (user) {
+      const ordersRef = ref(rtdb, 'orders');
+      
+      const unsubscribe = onValue(ordersRef, (snapshot) => {
+        if (snapshot.exists()) {
+          const ordersData = snapshot.val();
+          const userOrders = Object.entries(ordersData)
+            .map(([id, data]: [string, any]) => ({ id, ...data }))
+            .filter((order: any) => order.userId === user.uid)
+            .sort((a: any, b: any) => b.createdAt - a.createdAt);
+
+          setOrders(userOrders);
+        } else {
+          setOrders([]);
+        }
+        setLoadingOrders(false);
+      });
+
+      return () => unsubscribe();
+    }
+  }, [user]);
+
+  const handleCancelOrder = async (orderId: string) => {
+    if (!confirm('Are you sure you want to cancel this order?')) return;
+
+    setCancellingOrder(orderId);
+    try {
+      await remove(ref(rtdb, `orders/${orderId}`));
+    } catch (error) {
+      console.error('Error cancelling order:', error);
+      alert('Failed to cancel order. Please try again.');
+    } finally {
+      setCancellingOrder(null);
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch (status.toLowerCase()) {
+      case 'processing':
+        return 'bg-blue-100 text-blue-700';
+      case 'shipped':
+        return 'bg-yellow-100 text-yellow-700';
+      case 'delivered':
+        return 'bg-green-100 text-green-700';
+      case 'cancelled':
+        return 'bg-red-100 text-red-700';
+      default:
+        return 'bg-gray-100 text-gray-700';
+    }
+  };
+
+  if (loading || loadingOrders) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-muted-foreground">Loading orders...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-5xl mx-auto px-6 py-32">
+      <div className="mb-12">
+        <h1 className="text-4xl md:text-5xl font-serif font-bold text-foreground mb-4">
+          My Orders & Deliveries
+        </h1>
+        <p className="text-muted-foreground">
+          Track your orders and manage deliveries
+        </p>
+      </div>
+
+      {orders.length === 0 ? (
+        <div className="text-center py-16">
+          <Icon name="ShoppingBagIcon" size={64} className="mx-auto text-muted-foreground mb-4" />
+          <h3 className="text-xl font-semibold text-foreground mb-2">No orders yet</h3>
+          <p className="text-muted-foreground mb-6">Start shopping to see your orders here!</p>
+          <button
+            onClick={() => router.push('/products')}
+            className="px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+          >
+            Browse Products
+          </button>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {orders.map((order) => (
+            <div key={order.id} className="bg-card border border-border rounded-xl overflow-hidden">
+              {/* Order Header */}
+              <div 
+                className="p-6 cursor-pointer hover:bg-secondary transition-colors"
+                onClick={() => setExpandedOrder(expandedOrder === order.id ? null : order.id)}
+              >
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="text-lg font-semibold text-foreground flex items-center gap-2">
+                      Order #{order.id.slice(-8)}
+                      {order.locked && (
+                        <Icon name="LockClosedIcon" size={18} className="text-yellow-600" />
+                      )}
+                    </h3>
+                    <p className="text-sm text-muted-foreground">
+                      {new Date(order.createdAt).toLocaleDateString('en-US', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getStatusColor(order.status || 'Processing')}`}>
+                      {order.status || 'Processing'}
+                    </span>
+                    <Icon 
+                      name={expandedOrder === order.id ? "ChevronUpIcon" : "ChevronDownIcon"} 
+                      size={20} 
+                      className="text-muted-foreground"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <p className="text-sm text-muted-foreground">
+                    {order.items?.length || 0} item{order.items?.length !== 1 ? 's' : ''}
+                  </p>
+                  <p className="text-xl font-bold text-primary">
+                    ${order.total?.toFixed(2) || '0.00'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Expanded Order Details */}
+              {expandedOrder === order.id && (
+                <div className="border-t border-border bg-secondary/30">
+                  <div className="p-6 space-y-6">
+                    {/* Order Items */}
+                    <div>
+                      <h4 className="font-semibold text-foreground mb-3">Order Items</h4>
+                      <div className="space-y-3">
+                        {order.items?.map((item, index) => (
+                          <div key={index} className="flex items-center gap-4 bg-white p-3 rounded-lg">
+                            {item.image && (
+                              <img 
+                                src={item.image} 
+                                alt={item.name} 
+                                className="w-16 h-16 object-cover rounded-lg"
+                              />
+                            )}
+                            <div className="flex-1">
+                              <p className="font-medium text-foreground">{item.name}</p>
+                              <p className="text-sm text-muted-foreground">
+                                Quantity: {item.quantity} × ${item.price?.toFixed(2)}
+                              </p>
+                            </div>
+                            <p className="font-semibold text-foreground">
+                              ${((item.price || 0) * (item.quantity || 0)).toFixed(2)}
+                            </p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Shipping Address */}
+                    {order.shippingAddress && (
+                      <div>
+                        <h4 className="font-semibold text-foreground mb-3">Shipping Address</h4>
+                        <div className="bg-white p-4 rounded-lg space-y-1">
+                          <p className="font-medium text-foreground">{order.shippingAddress.fullName}</p>
+                          <p className="text-sm text-muted-foreground">{order.shippingAddress.address}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {order.shippingAddress.city}, {order.shippingAddress.zipCode}
+                          </p>
+                          <p className="text-sm text-muted-foreground">{order.shippingAddress.country}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Payment Method */}
+                    {order.paymentMethod && (
+                      <div>
+                        <h4 className="font-semibold text-foreground mb-3">Payment Method</h4>
+                        <div className="bg-white p-4 rounded-lg">
+                          <p className="text-sm text-foreground">{order.paymentMethod}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Order Summary */}
+                    <div>
+                      <h4 className="font-semibold text-foreground mb-3">Order Summary</h4>
+                      <div className="bg-white p-4 rounded-lg space-y-2">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Subtotal</span>
+                          <span className="text-foreground">${order.total?.toFixed(2) || '0.00'}</span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-muted-foreground">Shipping</span>
+                          <span className="text-foreground">Free</span>
+                        </div>
+                        <div className="border-t border-border pt-2 flex justify-between font-semibold">
+                          <span className="text-foreground">Total</span>
+                          <span className="text-primary text-lg">${order.total?.toFixed(2) || '0.00'}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Cancel Order Button */}
+                    {order.locked ? (
+                      <div className="flex items-center gap-2 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                        <Icon name="LockClosedIcon" size={20} className="text-yellow-600" />
+                        <p className="text-sm text-yellow-700 font-medium">
+                          This order is locked and cannot be cancelled
+                        </p>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleCancelOrder(order.id)}
+                        disabled={cancellingOrder === order.id}
+                        className="w-full py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-semibold transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+                      >
+                        {cancellingOrder === order.id ? (
+                          <>
+                            <Icon name="ArrowPathIcon" size={20} className="animate-spin" />
+                            Cancelling...
+                          </>
+                        ) : (
+                          <>
+                            <Icon name="XCircleIcon" size={20} />
+                            Cancel Order
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

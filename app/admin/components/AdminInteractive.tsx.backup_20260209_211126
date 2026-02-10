@@ -1,0 +1,747 @@
+"use client";
+import { useState, useEffect, useRef } from 'react';
+import { rtdb } from '@/lib/firebase';
+import { ref, set, get, remove, onValue } from 'firebase/database';
+import Icon from '@/components/ui/AppIcon';
+import UsersManagement from './UsersManagement';
+import OrdersManagement from './OrdersManagement';
+import ConfirmModal from './ConfirmModal';
+
+interface Category {
+  id: string;
+  name: string;
+}
+
+interface Product {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  images: string[];
+  imageAlt: string;
+  quantity?: number | null;
+  description?: string;
+}
+
+interface Message {
+  id: string;
+  type: 'success' | 'error';
+  text: string;
+}
+
+interface ConfirmState {
+  isOpen: boolean;
+  title: string;
+  message: string;
+  onConfirm: () => void;
+  type: 'danger' | 'warning' | 'info';
+}
+
+export default function AdminInteractive() {
+  const [activeTab, setActiveTab] = useState<'categories' | 'products' | 'users' | 'orders'>('categories');
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [uploading, setUploading] = useState(false);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [confirmModal, setConfirmModal] = useState<ConfirmState>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    type: 'warning'
+  });
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const editFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
+  const [editingCategoryName, setEditingCategoryName] = useState('');
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingProduct, setEditingProduct] = useState<Partial<Product>>({});
+
+  const [newProduct, setNewProduct] = useState<Partial<Product>>({
+    name: '',
+    category: '',
+    price: 0,
+    images: [],
+    imageAlt: '',
+    quantity: null,
+    description: '',
+  });
+
+  const addMessage = (type: 'success' | 'error', text: string) => {
+    const id = Date.now().toString();
+    setMessages(prev => [...prev, { id, type, text }]);
+    setTimeout(() => {
+      setMessages(prev => prev.filter(msg => msg.id !== id));
+    }, 3000);
+  };
+
+  const showConfirm = (title: string, message: string, onConfirm: () => void, type: 'danger' | 'warning' | 'info' = 'warning') => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm,
+      type
+    });
+  };
+
+  useEffect(() => {
+    const categoriesRef = ref(rtdb, 'categories');
+    const unsubscribeCategories = onValue(categoriesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const categoriesData = snapshot.val();
+        const categoriesArray = Object.entries(categoriesData).map(([id, data]: [string, any]) => ({
+          id,
+          name: data.name
+        }));
+        setCategories(categoriesArray);
+      } else {
+        setCategories([]);
+      }
+    });
+
+    const productsRef = ref(rtdb, 'products');
+    const unsubscribeProducts = onValue(productsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const productsData = snapshot.val();
+        const productsArray = Object.entries(productsData).map(([id, data]: [string, any]) => ({
+          id,
+          ...data,
+          images: data.images || (data.image ? [data.image] : [])
+        }));
+        setProducts(productsArray);
+      } else {
+        setProducts([]);
+      }
+      setLoading(false);
+    });
+
+    return () => {
+      unsubscribeCategories();
+      unsubscribeProducts();
+    };
+  }, []);
+
+  const uploadImages = async (files: FileList): Promise<string[]> => {
+    const urls: string[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error('Upload failed');
+      }
+
+      const data = await response.json();
+      urls.push(data.url);
+    }
+    return urls;
+  };
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      setUploading(true);
+      const urls = await uploadImages(files);
+      setNewProduct(prev => ({
+        ...prev,
+        images: [...(prev.images || []), ...urls]
+      }));
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      addMessage('success', 'Images uploaded successfully!');
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      addMessage('error', 'Failed to upload images.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const handleEditFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    try {
+      setUploading(true);
+      const urls = await uploadImages(files);
+      setEditingProduct(prev => ({
+        ...prev,
+        images: [...(prev.images || []), ...urls]
+      }));
+      if (editFileInputRef.current) editFileInputRef.current.value = '';
+      addMessage('success', 'Images uploaded successfully!');
+    } catch (error) {
+      console.error('Error uploading images:', error);
+      addMessage('error', 'Failed to upload images.');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const removeNewProductImage = (index: number) => {
+    setNewProduct(prev => ({
+      ...prev,
+      images: prev.images?.filter((_, i) => i !== index) || []
+    }));
+  };
+
+  const removeEditingProductImage = (index: number) => {
+    setEditingProduct(prev => ({
+      ...prev,
+      images: prev.images?.filter((_, i) => i !== index) || []
+    }));
+  };
+
+  const getStockStatus = (quantity: number | null | undefined) => {
+    if (quantity === null || quantity === undefined) {
+      return { text: 'Unlimited', color: 'text-green-600' };
+    }
+    if (quantity === 0) {
+      return { text: 'Out of Stock', color: 'text-red-600' };
+    }
+    return { text: `${quantity} left`, color: 'text-yellow-600' };
+  };
+
+  const handleAddCategory = async () => {
+    if (!newCategoryName.trim()) {
+      addMessage('error', 'Please enter a category name.');
+      return;
+    }
+    const newCategory: Category = {
+      id: `cat_${Date.now()}`,
+      name: newCategoryName.trim(),
+    };
+    try {
+      await set(ref(rtdb, `categories/${newCategory.id}`), { name: newCategory.name });
+      setNewCategoryName('');
+      window.dispatchEvent(new Event('categoriesUpdated'));
+      addMessage('success', 'Category added successfully!');
+    } catch (error) {
+      console.error('Error adding category:', error);
+      addMessage('error', 'Failed to add category.');
+    }
+  };
+
+  const handleEditCategory = (category: Category) => {
+    setEditingCategoryId(category.id);
+    setEditingCategoryName(category.name);
+  };
+
+  const handleSaveCategory = async () => {
+    if (!editingCategoryId || !editingCategoryName.trim()) return;
+    try {
+      await set(ref(rtdb, `categories/${editingCategoryId}`), { name: editingCategoryName.trim() });
+      setEditingCategoryId(null);
+      setEditingCategoryName('');
+      window.dispatchEvent(new Event('categoriesUpdated'));
+      addMessage('success', 'Category updated successfully!');
+    } catch (error) {
+      console.error('Error updating category:', error);
+      addMessage('error', 'Failed to update category.');
+    }
+  };
+
+  const handleRemoveCategory = (categoryId: string, categoryName: string) => {
+    showConfirm(
+      'Delete Category',
+      `Are you sure you want to delete "${categoryName}"? This action cannot be undone.`,
+      async () => {
+        try {
+          await remove(ref(rtdb, `categories/${categoryId}`));
+          window.dispatchEvent(new Event('categoriesUpdated'));
+          addMessage('success', 'Category deleted successfully!');
+        } catch (error) {
+          console.error('Error removing category:', error);
+          addMessage('error', 'Failed to remove category.');
+        }
+      },
+      'danger'
+    );
+  };
+
+  const handleAddProduct = async () => {
+    if (!newProduct.name || !newProduct.category || !newProduct.price) {
+      addMessage('error', 'Please fill in name, category, and price.');
+      return;
+    }
+
+    if (!newProduct.images || newProduct.images.length === 0) {
+      addMessage('error', 'Please add at least one image.');
+      return;
+    }
+
+    const productId = `prod_${Date.now()}`;
+    const product: Product = {
+      id: productId,
+      name: newProduct.name,
+      category: newProduct.category,
+      price: newProduct.price,
+      images: newProduct.images,
+      imageAlt: newProduct.imageAlt || `${newProduct.name} product image`,
+      quantity: newProduct.quantity,
+      description: newProduct.description || '',
+    };
+
+    try {
+      const { id, ...productData } = product;
+      await set(ref(rtdb, `products/${productId}`), productData);
+      setNewProduct({ name: '', category: '', price: 0, images: [], imageAlt: '', quantity: null, description: '' });
+      window.dispatchEvent(new Event('productsUpdated'));
+      addMessage('success', 'Product added successfully!');
+    } catch (error) {
+      console.error('Error adding product:', error);
+      addMessage('error', 'Failed to add product.');
+    }
+  };
+
+  const handleEditProduct = (product: Product) => {
+    setEditingProductId(product.id);
+    setEditingProduct({ ...product });
+  };
+
+  const handleSaveProduct = async () => {
+    if (!editingProductId || !editingProduct.name || !editingProduct.category) return;
+    try {
+      const { id, ...productData } = editingProduct as Product;
+      await set(ref(rtdb, `products/${editingProductId}`), productData);
+      setEditingProductId(null);
+      setEditingProduct({});
+      window.dispatchEvent(new Event('productsUpdated'));
+      addMessage('success', 'Product updated successfully!');
+    } catch (error) {
+      console.error('Error updating product:', error);
+      addMessage('error', 'Failed to update product.');
+    }
+  };
+
+  const handleRemoveProduct = (productId: string, productName: string) => {
+    showConfirm(
+      'Delete Product',
+      `Are you sure you want to delete "${productName}"? This action cannot be undone.`,
+      async () => {
+        try {
+          await remove(ref(rtdb, `products/${productId}`));
+          window.dispatchEvent(new Event('productsUpdated'));
+          addMessage('success', 'Product deleted successfully!');
+        } catch (error) {
+          console.error('Error removing product:', error);
+          addMessage('error', 'Failed to remove product.');
+        }
+      },
+      'danger'
+    );
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-muted-foreground">Loading admin panel...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-7xl mx-auto px-6 py-32">
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        onConfirm={confirmModal.onConfirm}
+        onCancel={() => setConfirmModal({ ...confirmModal, isOpen: false })}
+        type={confirmModal.type}
+        confirmText="Delete"
+        cancelText="Cancel"
+      />
+
+      <div className="fixed top-24 right-6 z-50 space-y-2">
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`animate-slide-in-right px-6 py-3 rounded-lg shadow-lg flex items-center gap-3 ${
+              message.type === 'success'
+                ? 'bg-green-500 text-white'
+                : 'bg-red-500 text-white'
+            }`}
+          >
+            <Icon
+              name={message.type === 'success' ? 'CheckCircleIcon' : 'XCircleIcon'}
+              size={20}
+            />
+            <span>{message.text}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mb-12">
+        <h1 className="text-4xl md:text-5xl font-serif font-bold text-foreground mb-4">
+          Admin Panel
+        </h1>
+        <p className="text-muted-foreground">
+          Manage your store categories, products, users, and orders
+        </p>
+      </div>
+
+      <div className="flex gap-4 mb-8 border-b border-border overflow-x-auto">
+        {['categories', 'products', 'users', 'orders'].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab as any)}
+            className={`px-6 py-3 text-sm font-medium transition-colors whitespace-nowrap capitalize ${
+              activeTab === tab ? 'text-primary border-b-2 border-primary' : 'text-muted-foreground hover:text-foreground'
+            }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'categories' && (
+        <div className="space-y-8">
+          <div className="bg-card p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold text-foreground mb-4">Add New Category</h2>
+            <div className="flex gap-4">
+              <input
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                placeholder="Category name"
+                className="flex-1 px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground"
+              />
+              <button
+                onClick={handleAddCategory}
+                className="px-6 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-accent hover:text-accent-foreground transition-colors"
+              >
+                Add Category
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-card p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold text-foreground mb-4">Existing Categories</h2>
+            <div className="space-y-3">
+              {categories.length === 0 && (
+                <p className="text-muted-foreground text-center py-8">No categories yet. Add one above!</p>
+              )}
+              {categories.map((category) => (
+                <div key={category.id} className="flex items-center justify-between p-4 bg-secondary rounded-lg">
+                  {editingCategoryId === category.id ? (
+                    <div className="flex-1 flex gap-2">
+                      <input
+                        type="text"
+                        value={editingCategoryName}
+                        onChange={(e) => setEditingCategoryName(e.target.value)}
+                        className="flex-1 px-3 py-1 border border-border rounded-lg bg-background text-foreground"
+                      />
+                      <button onClick={handleSaveCategory} className="px-4 py-1 bg-green-600 text-white rounded-lg text-sm">
+                        Save
+                      </button>
+                      <button onClick={() => setEditingCategoryId(null)} className="px-4 py-1 bg-gray-500 text-white rounded-lg text-sm">
+                        Cancel
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <span className="text-foreground font-medium">{category.name}</span>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => handleEditCategory(category)}
+                          className="p-2 text-blue-500 hover:bg-blue-500/10 rounded-lg transition-colors"
+                        >
+                          <Icon name="PencilIcon" size={20} />
+                        </button>
+                        <button
+                          onClick={() => handleRemoveCategory(category.id, category.name)}
+                          className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                        >
+                          <Icon name="TrashIcon" size={20} />
+                        </button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'products' && (
+        <div className="space-y-8">
+          <div className="bg-card p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold text-foreground mb-4">Add New Product</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <input
+                type="text"
+                value={newProduct.name}
+                onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })}
+                placeholder="Product name"
+                className="px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground"
+              />
+              <select
+                value={newProduct.category}
+                onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
+                className="px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground"
+              >
+                <option value="">Select category</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.name}>{cat.name}</option>
+                ))}
+              </select>
+              <input
+                type="number"
+                value={newProduct.price || ''}
+                onChange={(e) => setNewProduct({ ...newProduct, price: parseFloat(e.target.value) || 0 })}
+                placeholder="Price"
+                className="px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground"
+              />
+              <input
+                type="number"
+                value={newProduct.quantity ?? ''}
+                onChange={(e) => setNewProduct({ ...newProduct, quantity: e.target.value ? parseInt(e.target.value) : null })}
+                placeholder="Quantity (leave empty for unlimited)"
+                className="px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground"
+              />
+
+              <textarea
+                value={newProduct.description || ''}
+                onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })}
+                placeholder="Product description"
+                rows={4}
+                className="md:col-span-2 px-4 py-2 border border-border rounded-lg focus:ring-2 focus:ring-primary focus:outline-none bg-background text-foreground resize-none"
+              />
+
+              <div className="md:col-span-2 space-y-3">
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileSelect}
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                />
+
+                <div className="flex flex-wrap gap-3 items-start">
+                  {(!newProduct.images || newProduct.images.length === 0) && (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploading}
+                      className="px-6 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+                    >
+                      {uploading ? 'Uploading...' : '+ Add Picture'}
+                    </button>
+                  )}
+
+                  {newProduct.images && newProduct.images.map((url, index) => (
+                    <div key={index} className="relative">
+                      <img src={url} alt={`Product ${index + 1}`} className="w-24 h-24 object-cover rounded-lg border border-border" />
+                      <button
+                        type="button"
+                        onClick={() => removeNewProductImage(index)}
+                        className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold hover:bg-red-600"
+                      >
+                        ×
+                      </button>
+                      {index === newProduct.images.length - 1 && (
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={uploading}
+                          className="absolute -bottom-2 -right-2 bg-primary text-primary-foreground rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold hover:bg-accent disabled:opacity-50"
+                          title="Add more pictures"
+                        >
+                          +
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                {uploading && <p className="text-sm text-muted-foreground">Uploading...</p>}
+              </div>
+
+              <button
+                type="button"
+                onClick={handleAddProduct}
+                disabled={uploading}
+                className="md:col-span-2 px-6 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50"
+              >
+                Add Product
+              </button>
+            </div>
+          </div>
+
+          <div className="bg-card p-6 rounded-xl shadow-md">
+            <h2 className="text-xl font-semibold text-foreground mb-4">Existing Products</h2>
+            <div className="space-y-3">
+              {products.length === 0 && (
+                <p className="text-muted-foreground text-center py-8">No products yet. Add one above!</p>
+              )}
+              {products.map((product) => {
+                const stockStatus = getStockStatus(product.quantity);
+
+                if (editingProductId === product.id) {
+                  return (
+                    <div key={product.id} className="p-4 bg-secondary rounded-lg space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <input
+                          type="text"
+                          value={editingProduct.name || ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
+                          placeholder="Product name"
+                          className="px-3 py-2 border border-border rounded-lg bg-background text-foreground"
+                        />
+                        <select
+                          value={editingProduct.category || ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, category: e.target.value })}
+                          className="px-3 py-2 border border-border rounded-lg bg-background text-foreground"
+                        >
+                          <option value="">Select category</option>
+                          {categories.map((cat) => (
+                            <option key={cat.id} value={cat.name}>{cat.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          value={editingProduct.price || ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, price: parseFloat(e.target.value) || 0 })}
+                          placeholder="Price"
+                          className="px-3 py-2 border border-border rounded-lg bg-background text-foreground"
+                        />
+                        <input
+                          type="number"
+                          value={editingProduct.quantity ?? ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, quantity: e.target.value ? parseInt(e.target.value) : null })}
+                          placeholder="Quantity (empty = unlimited)"
+                          className="px-3 py-2 border border-border rounded-lg bg-background text-foreground"
+                        />
+
+                        <textarea
+                          value={editingProduct.description || ''}
+                          onChange={(e) => setEditingProduct({ ...editingProduct, description: e.target.value })}
+                          placeholder="Product description"
+                          rows={3}
+                          className="md:col-span-2 px-3 py-2 border border-border rounded-lg bg-background text-foreground resize-none"
+                        />
+                      </div>
+
+                      <div className="space-y-2">
+                        <input
+                          type="file"
+                          ref={editFileInputRef}
+                          onChange={handleEditFileSelect}
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                        />
+
+                        <div className="flex flex-wrap gap-3 items-start">
+                          {editingProduct.images && editingProduct.images.map((url, index) => (
+                            <div key={index} className="relative">
+                              <img src={url} alt={`Product ${index + 1}`} className="w-20 h-20 object-cover rounded-lg border border-border" />
+                              <button
+                                type="button"
+                                onClick={() => removeEditingProductImage(index)}
+                                className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold hover:bg-red-600"
+                              >
+                                ×
+                              </button>
+                              {index === (editingProduct.images?.length || 0) - 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => editFileInputRef.current?.click()}
+                                  disabled={uploading}
+                                  className="absolute -bottom-2 -right-2 bg-primary text-primary-foreground rounded-full w-5 h-5 flex items-center justify-center text-xs font-bold hover:bg-accent disabled:opacity-50"
+                                  title="Add more pictures"
+                                >
+                                  +
+                                </button>
+                              )}
+                            </div>
+                          ))}
+
+                          {(!editingProduct.images || editingProduct.images.length === 0) && (
+                            <button
+                              type="button"
+                              onClick={() => editFileInputRef.current?.click()}
+                              disabled={uploading}
+                              className="px-4 py-2 bg-primary text-primary-foreground rounded-lg font-medium hover:bg-accent hover:text-accent-foreground transition-colors disabled:opacity-50 text-xs"
+                            >
+                              + Add Picture
+                            </button>
+                          )}
+                        </div>
+
+                        {uploading && <p className="text-xs text-muted-foreground">Uploading...</p>}
+                      </div>
+
+                      <div className="flex gap-2">
+                        <button type="button" onClick={handleSaveProduct} className="px-4 py-2 bg-green-600 text-white rounded-lg text-sm">
+                          Save
+                        </button>
+                        <button type="button" onClick={() => setEditingProductId(null)} className="px-4 py-2 bg-gray-500 text-white rounded-lg text-sm">
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div key={product.id} className="flex items-center justify-between p-4 bg-secondary rounded-lg">
+                    <div className="flex items-center gap-4">
+                      {product.images && product.images[0] && (
+                        <img src={product.images[0]} alt={product.name} className="w-12 h-12 object-cover rounded-lg" />
+                      )}
+                      <div>
+                        <h3 className="text-foreground font-medium">{product.name}</h3>
+                        <p className="text-sm text-muted-foreground">
+                          {product.category} • ${product.price.toFixed(2)} • <span className={stockStatus.color}>{stockStatus.text}</span>
+                          {product.images && product.images.length > 1 && ` • ${product.images.length} images`}
+                        </p>
+                        {product.description && (
+                          <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{product.description}</p>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => handleEditProduct(product)}
+                        className="p-2 text-blue-500 hover:bg-blue-500/10 rounded-lg transition-colors"
+                      >
+                        <Icon name="PencilIcon" size={20} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveProduct(product.id, product.name)}
+                        className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors"
+                      >
+                        <Icon name="TrashIcon" size={20} />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'users' && <UsersManagement />}
+      {activeTab === 'orders' && <OrdersManagement />}
+    </div>
+  );
+}

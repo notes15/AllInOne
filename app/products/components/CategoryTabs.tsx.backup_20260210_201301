@@ -1,0 +1,63 @@
+﻿"use client";
+import { useState, useEffect } from 'react';
+import { rtdb } from '@/lib/firebase';
+import { ref, get, onValue } from 'firebase/database';
+
+interface CategoryTabsProps {
+  activeCategory: string;
+  onCategoryChange: (category: string) => void;
+}
+
+interface Category {
+  id: string;
+  name: string;
+}
+
+export default function CategoryTabs({ activeCategory, onCategoryChange }: CategoryTabsProps) {
+  const [categories, setCategories] = useState<Category[]>([]);
+
+  useEffect(() => {
+    // Clear old localStorage categories
+    localStorage.removeItem('categories');
+    
+    // Real-time listener for categories
+    const categoriesRef = ref(rtdb, 'categories');
+    const unsubscribe = onValue(categoriesRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const data = snapshot.val();
+        const categoriesArray = Object.entries(data).map(([id, val]: [string, any]) => ({
+          id,
+          name: typeof val === 'string' ? val : val.name
+        })) as Category[];
+        setCategories(categoriesArray);
+      } else {
+        setCategories([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const allCategories = [
+    { id: 'all', name: 'All Products' },
+    ...categories,
+  ];
+
+  return (
+    <div className="flex flex-wrap items-center gap-4 mb-8">
+      {allCategories.map((category) => (
+        <button
+          key={category.id}
+          onClick={() => onCategoryChange(category.id === 'all' ? 'all' : category.name.toLowerCase())}
+          className={`px-6 py-2 text-sm font-medium uppercase tracking-wide rounded-lg transition-all duration-300 ${
+            activeCategory === (category.id === 'all' ? 'all' : category.name.toLowerCase())
+              ? 'bg-primary text-primary-foreground shadow-md'
+              : 'text-muted-foreground hover:text-foreground hover:bg-secondary'
+          }`}
+        >
+          {category.name}
+        </button>
+      ))}
+    </div>
+  );
+}

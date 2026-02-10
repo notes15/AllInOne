@@ -1,0 +1,9 @@
+﻿const getStockStatus = (quantity: number | null | undefined) => {
+  if (quantity === null || quantity === undefined) {
+    return { text: 'Unlimited', color: 'text-green-600' };
+  }
+  if (quantity === 0) {
+    return { text: 'Out of Stock', color: 'text-red-600' };
+  }
+  return { text: `${quantity} left`, color: 'text-yellow-600' };
+};
